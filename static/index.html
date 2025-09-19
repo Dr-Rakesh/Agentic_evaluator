@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LLM Evaluation Platform</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .upload-section {
+            border: 2px dashed #007bff;
+            padding: 30px;
+            text-align: center;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+        .file-input {
+            margin: 10px 0;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+        .status {
+            margin: 20px 0;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .status.success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .status.info {
+            background-color: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        .status.warning {
+            background-color: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+        .results-section {
+            margin-top: 30px;
+            padding: 20px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+        }
+        .hidden {
+            display: none;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background-color: #e9ecef;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        .progress-fill {
+            height: 100%;
+            background-color: #007bff;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        .evaluation-options {
+            margin: 20px 0;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+        }
+        .evaluation-options label {
+            display: block;
+            margin: 10px 0;
+        }
+        .debug-info {
+            margin: 10px 0;
+            padding: 10px;
+            background-color: #f1f3f4;
+            border-radius: 5px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>CSV Uploader</h1>
+        
+        <div class="upload-section">
+            <h3>Upload CSV file</h3>
+            <input type="file" id="fileInput" class="file-input" accept=".csv,.xlsx,.xls">
+            <br>
+            <button onclick="uploadFile()" id="uploadButton">SUBMIT</button>
+        </div>
+        
+        <div id="status" class="hidden"></div>
+        
+        <div id="evaluationSection" class="hidden">
+            <h3>Evaluation Options</h3>
+            <div class="evaluation-options">
+                <label>
+                    <input type="checkbox" id="enableDeepeval" checked> Enable DeepEval Metrics
+                </label>
+                <label>
+                    <input type="checkbox" id="enableMathematical" checked> Enable Mathematical Metrics
+                </label>
+                <label>
+                    Max Workers: 
+                    <select id="maxWorkers">
+                        <option value="1">1</option>
+                        <option value="2">2</option>
+                        <option value="3" selected>3</option>
+                        <option value="4">4</option>
+                        <option value="5">5</option>
+                    </select>
+                </label>
+            </div>
+            <button onclick="startEvaluation()" id="evaluateButton">Start Evaluation</button>
+        </div>
+        
+        <div id="progressSection" class="hidden">
+            <h3>Evaluation Progress</h3>
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <div id="progressText">Initializing...</div>
+            <div id="debugInfo" class="debug-info hidden"></div>
+        </div>
+        
+        <div id="resultsSection" class="hidden results-section">
+            <h3>Evaluation Results</h3>
+            <div id="resultsContent"></div>
+            <button onclick="generateReport()" id="reportButton" class="hidden">Generate PDF Report</button>
+            <button onclick="downloadResults()" id="downloadButton" class="hidden">Download All as ZIP</button>
+        </div>
+    </div>
+
+    <script>
+        let currentFileId = null;
+        let currentTaskId = null;
+        let currentResultId = null;
+        let debugMode = true; // Set to false to hide debug info
+        
+        function debugLog(message, data = null) {
+            if (debugMode) {
+                const timestamp = new Date().toISOString();
+                const logMessage = `[${timestamp}] ${message}`;
+                console.log(logMessage, data || '');
+                
+                const debugDiv = document.getElementById('debugInfo');
+                if (debugDiv) {
+                    debugDiv.classList.remove('hidden');
+                    debugDiv.innerHTML += `<div>${logMessage}</div>`;
+                    if (data) {
+                        debugDiv.innerHTML += `<div style="margin-left: 20px;">${JSON.stringify(data, null, 2)}</div>`;
+                    }
+                }
+            }
+        }
+        
+        async function uploadFile() {
+            const fileInput = document.getElementById('fileInput');
+            const uploadButton = document.getElementById('uploadButton');
+            const file = fileInput.files[0];
+            
+            if (!file) {
+                showStatus('Please select a file', 'error');
+                return;
+            }
+            
+            debugLog('Starting file upload', { filename: file.name, size: file.size, type: file.type });
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            try {
+                uploadButton.disabled = true;
+                showStatus('Uploading file...', 'info');
+                
+                debugLog('Making upload request to /api/upload');
+                
+                const response = await fetch('/api/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                debugLog('Upload response received', { 
+                    status: response.status, 
+                    statusText: response.statusText,
+                    ok: response.ok 
+                });
+                
+                const result = await response.json();
+                debugLog('Upload result parsed', result);
+                
+                if (result.success) {
+                    currentFileId = result.file_id;
+                    showStatus(`File uploaded successfully! Processed ${result.validation_details.total_rows} rows.`, 'success');
+                    document.getElementById('evaluationSection').classList.remove('hidden');
+                    debugLog('File upload successful', { fileId: currentFileId });
+                } else {
+                    showStatus(`Upload failed: ${result.error}`, 'error');
+                    debugLog('Upload failed', result);
+                }
+            } catch (error) {
+                showStatus(`Upload error: ${error.message}`, 'error');
+                debugLog('Upload error caught', { error: error.message, stack: error.stack });
+            } finally {
+                uploadButton.disabled = false;
+            }
+        }
+        
+        async function startEvaluation() {
+            if (!currentFileId) {
+                showStatus('Please upload a file first', 'error');
+                return;
+            }
+            
+            const enableDeepeval = document.getElementById('enableDeepeval').checked;
+            const enableMathematical = document.getElementById('enableMathematical').checked;
+            const maxWorkers = parseInt(document.getElementById('maxWorkers').value);
+            const evaluateButton = document.getElementById('evaluateButton');
+            
+            if (!enableDeepeval && !enableMathematical) {
+                showStatus('Please enable at least one evaluation method', 'warning');
+                return;
+            }
+            
+            const requestData = {
+                file_id: currentFileId,
+                enable_deepeval: enableDeepeval,
+                enable_mathematical: enableMathematical,
+                max_workers: maxWorkers
+            };
+            
+            debugLog('Starting evaluation', requestData);
+            
+            try {
+                evaluateButton.disabled = true;
+                showStatus('Starting evaluation...', 'info');
+                
+                debugLog('Making evaluation request to /api/evaluate');
+                
+                const response = await fetch('/api/evaluate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(requestData)
+                });
+                
+                debugLog('Evaluation response received', { 
+                    status: response.status, 
+                    statusText: response.statusText,
+                    ok: response.ok 
+                });
+                
+                const result = await response.json();
+                debugLog('Evaluation result parsed', result);
+                
+                if (result.success) {
+                    currentTaskId = result.task_id;
+                    showStatus(`Evaluation started! Task ID: ${result.task_id}`, 'success');
+                    document.getElementById('progressSection').classList.remove('hidden');
+                    document.getElementById('evaluationSection').classList.add('hidden');
+                    debugLog('Evaluation started successfully', { taskId: currentTaskId });
+                    monitorProgress();
+                } else {
+                    showStatus(`Evaluation failed: ${result.error || 'Unknown error'}`, 'error');
+                    debugLog('Evaluation failed', result);
+                }
+            } catch (error) {
+                showStatus(`Evaluation error: ${error.message}`, 'error');
+                debugLog('Evaluation error caught', { error: error.message, stack: error.stack });
+            } finally {
+                evaluateButton.disabled = false;
+            }
+        }
+        
+        async function monitorProgress() {
+            if (!currentTaskId) {
+                debugLog('No current task ID for progress monitoring');
+                return;
+            }
+            
+            try {
+                debugLog('Checking progress for task', currentTaskId);
+                
+                const response = await fetch(`/api/status/${currentTaskId}`);
+                debugLog('Progress response received', { 
+                    status: response.status, 
+                    statusText: response.statusText,
+                    ok: response.ok 
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const status = await response.json();
+                debugLog('Progress status parsed', status);
+                
+                document.getElementById('progressFill').style.width = `${status.progress}%`;
+                document.getElementById('progressText').textContent = status.message;
+                
+                if (status.status === 'completed') {
+                    currentResultId = status.result_id;
+                    showStatus('Evaluation completed successfully!', 'success');
+                    document.getElementById('progressSection').classList.add('hidden');
+                    debugLog('Evaluation completed', { resultId: currentResultId });
+                    loadResults();
+                } else if (status.status === 'failed') {
+                    showStatus(`Evaluation failed: ${status.message}`, 'error');
+                    document.getElementById('progressSection').classList.add('hidden');
+                    debugLog('Evaluation failed during progress monitoring', status);
+                } else {
+                    debugLog('Continuing progress monitoring', { status: status.status, progress: status.progress });
+                    setTimeout(monitorProgress, 2000); // Check again in 2 seconds
+                }
+            } catch (error) {
+                showStatus(`Progress monitoring error: ${error.message}`, 'error');
+                debugLog('Progress monitoring error', { error: error.message, stack: error.stack });
+            }
+        }
+        
+        async function loadResults() {
+            if (!currentResultId) {
+                debugLog('No current result ID for loading results');
+                return;
+            }
+            
+            try {
+                debugLog('Loading results for', currentResultId);
+                
+                const response = await fetch(`/api/results/${currentResultId}`);
+                debugLog('Results response received', { 
+                    status: response.status, 
+                    statusText: response.statusText,
+                    ok: response.ok 
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                debugLog('Results data parsed', data);
+                
+                if (data.success) {
+                    displayResults(data.results);
+                    document.getElementById('resultsSection').classList.remove('hidden');
+                    document.getElementById('reportButton').classList.remove('hidden');
+                    document.getElementById('downloadButton').classList.remove('hidden');
+                    debugLog('Results displayed successfully');
+                } else {
+                    showStatus('Failed to load results', 'error');
+                    debugLog('Results loading failed', data);
+                }
+            } catch (error) {
+                showStatus(`Results loading error: ${error.message}`, 'error');
+                debugLog('Results loading error', { error: error.message, stack: error.stack });
+            }
+        }
+        
+        function displayResults(results) {
+            debugLog('Displaying results', results);
+            
+            let html = '<h4>Evaluation Summary</h4>';
+            html += `<p><strong>Total Rows Processed:</strong> ${results.input_data_summary.total_rows}</p>`;
+            html += `<p><strong>Evaluation Timestamp:</strong> ${results.evaluation_summary.timestamp}</p>`;
+            
+            if (results.deepeval_summary) {
+                html += '<h5>DeepEval Results</h5>';
+                html += `<p>Overall Score: ${results.deepeval_summary.overall_score.toFixed(3)}</p>`;
+                html += `<p>Metrics Evaluated: ${results.deepeval_summary.total_metrics}</p>`;
+                html += `<p>Successful Rows: ${results.deepeval_summary.successful_rows}</p>`;
+            }
+            
+            if (results.mathematical_summary) {
+                html += '<h5>Mathematical Results</h5>';
+                html += `<p>Overall Score: ${results.mathematical_summary.overall_score.toFixed(3)}</p>`;
+                html += `<p>Metrics Evaluated: ${results.mathematical_summary.total_metrics}</p>`;
+                html += `<p>Successful Rows: ${results.mathematical_summary.successful_rows}</p>`;
+            }
+            
+            if (!results.deepeval_summary && !results.mathematical_summary) {
+                html += '<p style="color: orange;">No evaluation results available. Check if evaluation agents are properly configured.</p>';
+            }
+            
+            document.getElementById('resultsContent').innerHTML = html;
+        }
+        
+        async function generateReport() {
+            if (!currentResultId) {
+                debugLog('No current result ID for report generation');
+                return;
+            }
+            
+            try {
+                showStatus('Generating PDF report...', 'info');
+                debugLog('Starting report generation for', currentResultId);
+                
+                const response = await fetch(`/api/generate-report/${currentResultId}`, {
+                    method: 'POST'
+                });
+                
+                debugLog('Report response received', { 
+                    status: response.status, 
+                    statusText: response.statusText,
+                    ok: response.ok 
+                });
+                
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `llm_evaluation_report_${new Date().toISOString().slice(0,10)}.pdf`;
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    document.body.removeChild(a);
+                    showStatus('PDF report downloaded successfully!', 'success');
+                    debugLog('Report downloaded successfully');
+                } else {
+                    const errorText = await response.text();
+                    showStatus('Failed to generate report', 'error');
+                    debugLog('Report generation failed', { status: response.status, error: errorText });
+                }
+            } catch (error) {
+                showStatus(`Report generation error: ${error.message}`, 'error');
+                debugLog('Report generation error', { error: error.message, stack: error.stack });
+            }
+        }
+        
+        async function downloadResults() {
+            if (!currentResultId) {
+                debugLog('No current result ID for downloading results');
+                return;
+            }
+            
+            try {
+                showStatus('Preparing download...', 'info');
+                debugLog('Starting results download for', currentResultId);
+                
+                const response = await fetch(`/api/results/${currentResultId}/detailed`);
+                debugLog('Detailed results response received', { 
+                    status: response.status, 
+                    statusText: response.statusText,
+                    ok: response.ok 
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                const dataStr = JSON.stringify(data, null, 2);
+                const blob = new Blob([dataStr], {type: 'application/json'});
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `evaluation_results_${new Date().toISOString().slice(0,10)}.json`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+                showStatus('Results downloaded successfully!', 'success');
+                debugLog('Results downloaded successfully');
+            } catch (error) {
+                showStatus(`Download error: ${error.message}`, 'error');
+                debugLog('Download error', { error: error.message, stack: error.stack });
+            }
+        }
+        
+        function showStatus(message, type) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.className = `status ${type}`;
+            statusDiv.textContent = message;
+            statusDiv.classList.remove('hidden');
+            
+            debugLog(`Status: ${type}`, message);
+        }
+        
+        // Check API health on page load
+        async function checkAPIHealth() {
+            try {
+                debugLog('Checking API health');
+                const response = await fetch('/health');
+                if (response.ok) {
+                    const health = await response.json();
+                    debugLog('API health check successful', health);
+                    showStatus(`API is healthy. ${health.total_agents} agents available.`, 'success');
+                } else {
+                    debugLog('API health check failed', { status: response.status });
+                    showStatus('API health check failed', 'warning');
+                }
+            } catch (error) {
+                debugLog('API health check error', { error: error.message });
+                showStatus('Cannot connect to API', 'error');
+            }
+        }
+        
+        // Run health check when page loads
+        window.addEventListener('load', checkAPIHealth);
+    </script>
+</body>
+</html>
